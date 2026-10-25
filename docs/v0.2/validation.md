@@ -8,6 +8,7 @@
 - Linux Docker：Agent 使用 Go 1.23，Focus-Go 使用 Go 1.26，各运行 `go test -race ./... -count=3` 通过。
 - Focus-Go 的 32 MiB 格式限制、v1 hash golden 与第一阶段回归保留；新增 v2 装备、文件收据及自包含模型工件。
 - Forest Core 及 Python Focus 未修改。开发中的临时 go.work 位于被忽略的 .scratch；正式交付依赖以 go.mod 固定发布版本。
+- 已先发布 go-forest-agent v0.2.0，再将 Focus-Go 正式依赖固定到该版本；独立外部 Go 模块实际下载并组合模型/Journal Definition 通过，无本地替换。
 
 CI 对 Windows/Linux 运行 vet、完整测试和原 demo，Linux 额外三轮 race。联网验收不放入无密钥 CI。
 

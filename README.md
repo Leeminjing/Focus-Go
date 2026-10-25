@@ -64,7 +64,7 @@ go run ./cmd/focus-go demo -data .scratch/variant -fixture testdata/base-7.json 
 
 本项目使用独立的 Go 数据与检查点格式，通过产品适配层连接 go-forest-agent。现有 Python [Focus](https://github.com/Leeminjing/Focus) 保持不变；不迁移 Patrol、Kernel、Coordinator 或桌面前端。
 
-Forest 固定依赖 [go-forest v0.3.0](https://github.com/Leeminjing/go-forest/releases/tag/v0.3.0)；Agent 固定版本见 go.mod。原第一阶段基线使用的 v0.1.0 标签保持不变。
+固定依赖 [go-forest v0.3.0](https://github.com/Leeminjing/go-forest/releases/tag/v0.3.0) 和 [go-forest-agent v0.2.0](https://github.com/Leeminjing/go-forest-agent/releases/tag/v0.2.0)，没有本地 replace 或 @main。原第一阶段基线使用的 v0.1.0 标签保持不变。
 
 领域术语见 CONTEXT.md；固定源码版本及行为证据见 docs/source-audit.md。
 

@@ -20,4 +20,4 @@
 | [RunLifecycleFinalizer](https://github.com/Leeminjing/Focus/blob/78df14e5d48c853b03de728b8dd8d8b45f2a5a9c/backend/app/desktop/runs/orchestration/lifecycle.py) | 结算读取最终 checkpoint；原子保存终态、发布合法 Context Revision 和 outbox；base 已过时则 superseded；重复 finalize 返回同一结算事实。 |
 | [Revision 历史续接](https://github.com/Leeminjing/Focus/blob/78df14e5d48c853b03de728b8dd8d8b45f2a5a9c/backend/app/desktop/contexts/evolution/history.py) | 保留 execution items；authored 继承旧定义，只追加新的用户输入，不把全部模型或工具输出提升为作者定义。 |
 
-这是现有行为的研究记录。Focus-Go 仍处于本地规格/设计评审阶段，没有 Go 实现，也不宣称已兼容全部 Python 数据或功能。
+这是第一阶段规划时形成的现有行为研究记录。后续 Go 实现与验收见 validation.md 及 v0.2/validation.md；不宣称已兼容全部 Python 数据或功能。
