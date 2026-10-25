@@ -1,0 +1,12 @@
+[
+  {
+    "input": "{\"\u4e2d\u6587\":\"<>&\\u2028\",\"arr\":[null,true,false,-0,9007199254740991],\"control\":\"\\b\\f\\n\\r\\t\\u0001\",\"escaped\":\"\\\"\\\\/\"}",
+    "canonical": "{\"arr\":[null,true,false,0,9007199254740991],\"control\":\"\\b\\f\\n\\r\\t\\u0001\",\"escaped\":\"\\\"\\\\/\",\"\u4e2d\u6587\":\"<>&\u2028\"}",
+    "sha256": "a4c972a6c8e46711ca564ae674d54e4532ef9369fff358fbfa27b5cc549f7f69"
+  },
+  {
+    "input": "{\"z\":2,\"a\":{\"b\":1,\"a\":\"\u00e9\ud83d\ude00\"}}",
+    "canonical": "{\"a\":{\"a\":\"\u00e9\ud83d\ude00\",\"b\":1},\"z\":2}",
+    "sha256": "912f9d6d452b470755b305a807a820bb0a10cfa92578a2027b7bdfaa5fe8fd33"
+  }
+]

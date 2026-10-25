@@ -1,0 +1,115 @@
+{
+  "contract_version": "focus-go-context-run-v1",
+  "context": {
+    "workspace_id": "w1",
+    "context_id": "c1",
+    "lifecycle": "active",
+    "current_ref": {
+      "context_id": "c1",
+      "revision_id": "r1",
+      "generation": 1,
+      "execution_thread_id": "thread-c1",
+      "checkpoint_ns": "focus-go",
+      "checkpoint_id": "seed-c1-r1",
+      "payload_mode": "checkpoint"
+    }
+  },
+  "revision": {
+    "contract_version": "focus-go-context-run-v1",
+    "record_type": "context_revision",
+    "hash_profile": "focus-json-integer-v1",
+    "checkpoint_backend": {
+      "engine": "focus-go-snapshot",
+      "format": "context-snapshot-v1",
+      "store_id": "fixture-store"
+    },
+    "revision": {
+      "ref": {
+        "context_id": "c1",
+        "revision_id": "r1",
+        "generation": 1,
+        "execution_thread_id": "thread-c1",
+        "checkpoint_ns": "focus-go",
+        "checkpoint_id": "seed-c1-r1",
+        "payload_mode": "checkpoint"
+      },
+      "sources": [],
+      "history_payload": {
+        "schema_version": 2,
+        "authored_items": [
+          {
+            "item_id": "seed-user",
+            "kind": "message",
+            "origin": "direct_user",
+            "scope": "revision",
+            "payload": {
+              "message": {
+                "id": "seed-user",
+                "role": "user",
+                "content": "BASE=40"
+              }
+            },
+            "source_refs": [],
+            "message_id": "seed-user",
+            "provider": null,
+            "projection_version": null,
+            "bridge": null
+          }
+        ],
+        "execution_items": [
+          {
+            "item_id": "seed-user",
+            "kind": "message",
+            "origin": "direct_user",
+            "scope": "revision",
+            "payload": {
+              "message": {
+                "id": "seed-user",
+                "role": "user",
+                "content": "BASE=40"
+              }
+            },
+            "source_refs": [],
+            "message_id": "seed-user",
+            "provider": null,
+            "projection_version": null,
+            "bridge": null
+          },
+          {
+            "item_id": "seed-assistant",
+            "kind": "message",
+            "origin": "provider",
+            "scope": "execution",
+            "payload": {
+              "message": {
+                "id": "seed-assistant",
+                "role": "assistant",
+                "content": "Base recorded."
+              }
+            },
+            "source_refs": [],
+            "message_id": "seed-assistant",
+            "provider": null,
+            "projection_version": null,
+            "bridge": null
+          }
+        ],
+        "binding_refs": [],
+        "selection_version": "focus-semantic-selection-v2"
+      },
+      "projection_status": "valid",
+      "origin_kind": "root",
+      "origin_id": null,
+      "created_at": "2026-10-25T00:00:00Z",
+      "content_hash": "bf39ce787abb72c4c16f6d7c9c08fde1250bf5aeba8733ee9220d12b61d3d37d",
+      "definition_hash": null,
+      "projection_hash": null,
+      "initial_message_ids": [
+        "seed-user",
+        "seed-assistant"
+      ],
+      "repair_manifest": [],
+      "issues": []
+    }
+  }
+}
