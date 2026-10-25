@@ -9,14 +9,18 @@ import (
 )
 
 type Request struct {
-	WorkspaceID string `json:"workspace_id"`
-	ContextID   string `json:"context_id"`
-	Expected    Ref    `json:"expected_ref"`
-	Input       string `json:"input"`
-	Key         string `json:"idempotency_key"`
+	Equipment   *Equipment `json:"equipment,omitempty"`
+	WorkspaceID string     `json:"workspace_id"`
+	ContextID   string     `json:"context_id"`
+	Expected    Ref        `json:"expected_ref"`
+	Input       string     `json:"input"`
+	Key         string     `json:"idempotency_key"`
 }
 
 func (r Request) Validate() error {
+	if r.Equipment != nil && (r.Equipment.Validate() != nil || r.Equipment.Workspace.ID != r.WorkspaceID) {
+		return ErrInvalid
+	}
 	if !ID(r.WorkspaceID) || !ID(r.ContextID) || !ID(r.Key) || r.Input == "" || !Text(r.Input) || r.ContextID != r.Expected.ContextID {
 		return ErrInvalid
 	}
@@ -48,6 +52,8 @@ type Settlement struct {
 	Idempotent        bool    `json:"idempotent"`
 }
 type Run struct {
+	Version           string      `json:"contract_version,omitempty"`
+	Equipment         *Equipment  `json:"equipment,omitempty"`
 	ID                string      `json:"run_id"`
 	TaskID            string      `json:"task_id"`
 	WorkspaceID       string      `json:"workspace_id"`
@@ -73,6 +79,12 @@ type Run struct {
 }
 
 func (r Run) Validate() error {
+	if (r.Version == "") != (r.Equipment == nil) {
+		return ErrCorrupt
+	}
+	if r.Equipment != nil && (r.Version != CodingVersion || r.Equipment.Validate() != nil || r.Equipment.Workspace.ID != r.WorkspaceID || r.Equipment.ModelProfile != r.ModelProfile) {
+		return ErrCorrupt
+	}
 	if !ID(r.ID) || !ID(r.TaskID) || !ID(r.WorkspaceID) || r.Kind != "main" || r.Origin != "direct_user" || len(r.Input) != 1 || r.Base.Validate() != nil || r.TaskID != r.Base.ContextID || r.ExecutionThreadID != r.Base.ExecutionThreadID || r.CheckpointNS != r.Base.CheckpointNS || r.AgentRunID != StableID("agent", r.ID, 0) || r.OriginMessageID != StableID("message", r.ID, 0) || r.Input[0].ID != r.OriginMessageID || r.Input[0].Role != "user" || len(r.Input[0].Calls) != 0 || r.Input[0].CallID != "" || r.Input[0].Content == "" || !Text(r.Input[0].Content) || !ID(r.ModelProfile) || !ID(r.Key) {
 		return ErrCorrupt
 	}
@@ -89,7 +101,7 @@ func (r Run) Validate() error {
 	default:
 		return ErrCorrupt
 	}
-	expected, err := RequestHash(Request{WorkspaceID: r.WorkspaceID, ContextID: r.TaskID, Expected: r.Base, Input: r.Input[0].Content, Key: r.Key}, r.ModelProfile)
+	expected, err := RequestHash(Request{Equipment: r.Equipment, WorkspaceID: r.WorkspaceID, ContextID: r.TaskID, Expected: r.Base, Input: r.Input[0].Content, Key: r.Key}, r.ModelProfile)
 	if err != nil || expected != r.RequestHash {
 		return ErrCorrupt
 	}
@@ -129,6 +141,7 @@ type AgentCheckpointRef struct {
 	Revision uint64 `json:"revision"`
 }
 type Snapshot struct {
+	Evidence          *Evidence           `json:"evidence,omitempty"`
 	Version           string              `json:"contract_version"`
 	CheckpointID      string              `json:"checkpoint_id"`
 	Backend           Backend             `json:"checkpoint_backend"`
@@ -145,8 +158,21 @@ type Snapshot struct {
 }
 
 func (s Snapshot) Validate() error {
-	if s.Version != ContractVersion || !ID(s.CheckpointID) || !ID(s.ContextID) || !ID(s.ExecutionThreadID) || !Text(s.CheckpointNS) {
+	if (s.Version != ContractVersion && s.Version != CodingVersion) || !ID(s.CheckpointID) || !ID(s.ContextID) || !ID(s.ExecutionThreadID) || !Text(s.CheckpointNS) {
 		return ErrCorrupt
+	}
+	if (s.Version == CodingVersion) != (s.Evidence != nil) {
+		return ErrCorrupt
+	}
+	if s.Evidence != nil {
+		if err := s.Evidence.Validate(); err != nil {
+			return err
+		}
+		for _, r := range s.Evidence.Receipts {
+			if r.RunID != s.RunID {
+				return ErrCorrupt
+			}
+		}
 	}
 	if _, err := time.Parse(time.RFC3339Nano, s.CreatedAt); err != nil {
 		return ErrCorrupt
@@ -180,6 +206,15 @@ func (s Snapshot) Validate() error {
 	return nil
 }
 func (s Snapshot) Matches(e Envelope) error {
+	if s.Version != e.Version {
+		return ErrRefMismatch
+	}
+	if s.Evidence != nil {
+		digest, err := Hash(*s.Evidence)
+		if err != nil || digest != e.EvidenceHash {
+			return ErrHash
+		}
+	}
 	r := e.Revision.Ref
 	if r.CheckpointID == nil || s.CheckpointID != *r.CheckpointID || s.ContextID != r.ContextID || s.ExecutionThreadID != r.ExecutionThreadID || s.CheckpointNS != r.CheckpointNS || s.Backend != e.Backend {
 		return ErrRefMismatch
@@ -204,19 +239,30 @@ type Event struct {
 	Settlement Settlement `json:"settlement"`
 }
 type Catalog struct {
-	Version   string              `json:"contract_version"`
-	Contexts  map[string]Context  `json:"contexts"`
-	Revisions map[string]Envelope `json:"revisions"`
-	Runs      map[string]Run      `json:"runs"`
-	Events    map[string]Event    `json:"outbox"`
+	Workspaces map[string]Workspace `json:"workspaces,omitempty"`
+	Version    string               `json:"contract_version"`
+	Contexts   map[string]Context   `json:"contexts"`
+	Revisions  map[string]Envelope  `json:"revisions"`
+	Runs       map[string]Run       `json:"runs"`
+	Events     map[string]Event     `json:"outbox"`
 }
 
 func EmptyCatalog() Catalog {
 	return Catalog{Version: ContractVersion, Contexts: map[string]Context{}, Revisions: map[string]Envelope{}, Runs: map[string]Run{}, Events: map[string]Event{}}
 }
 func (c Catalog) Validate() error {
-	if c.Version != ContractVersion || c.Contexts == nil || c.Revisions == nil || c.Runs == nil || c.Events == nil {
+	if (c.Version != ContractVersion && c.Version != CodingVersion) || c.Contexts == nil || c.Revisions == nil || c.Runs == nil || c.Events == nil {
 		return ErrCorrupt
+	}
+	if c.Version == ContractVersion && len(c.Workspaces) > 0 {
+		return ErrCorrupt
+	}
+	workspaceIdentities := map[string]bool{}
+	for id, w := range c.Workspaces {
+		if id != w.ID || w.Validate() != nil || workspaceIdentities[w.Identity] {
+			return ErrCorrupt
+		}
+		workspaceIdentities[w.Identity] = true
 	}
 	for id, env := range c.Revisions {
 		if env.Revision.Ref.RevisionID != id {
@@ -239,6 +285,7 @@ func (c Catalog) Validate() error {
 		}
 	}
 	active := map[string]bool{}
+	activeWorkspaces := map[string]bool{}
 	keys := map[struct{ workspace, key string }]bool{}
 	for id, run := range c.Runs {
 		if run.ID != id || run.Validate() != nil {
@@ -267,6 +314,15 @@ func (c Catalog) Validate() error {
 		}
 		keys[key] = true
 		if run.Settlement == nil {
+			if run.Equipment != nil {
+				w, ok := c.Workspaces[run.WorkspaceID]
+				a, _ := Hash(w)
+				b, _ := Hash(run.Equipment.Workspace)
+				if !ok || a != b || activeWorkspaces[w.Identity] {
+					return ErrCorrupt
+				}
+				activeWorkspaces[w.Identity] = true
+			}
 			if active[run.TaskID] {
 				return ErrCorrupt
 			}

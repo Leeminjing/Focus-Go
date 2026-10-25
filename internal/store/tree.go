@@ -10,6 +10,7 @@ import (
 // Consumers declare their own narrower interfaces; the provider imports no
 // app/Agent contract or implementation.
 type Capability interface {
+	RegisterWorkspace(context.Context, domain.Workspace) error
 	Install(context.Context, domain.Fixture, *domain.Ref) error
 	State(context.Context) (domain.Catalog, error)
 	Current(context.Context, string, string) (domain.Envelope, error)

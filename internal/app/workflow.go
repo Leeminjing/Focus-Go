@@ -26,6 +26,7 @@ type workflowAPI interface {
 	Finish(context.Context, string, bool) (domain.Run, error)
 }
 type workflow struct {
+	evidence forest.Ref[evidenceReader]
 	repo     forest.Ref[repository]
 	agent    forest.Ref[agent.Executor]
 	profile  string
@@ -144,6 +145,19 @@ func (w *workflow) Seal(ctx context.Context, id string) (domain.Snapshot, error)
 	if err != nil {
 		return domain.Snapshot{}, err
 	}
+	if run.Equipment != nil {
+		var evidence domain.Evidence
+		err = w.evidence.Use(ctx, func(reader evidenceReader) error {
+			var err error
+			evidence, err = reader.Collect(ctx, run, base, record)
+			return err
+		})
+		if err != nil {
+			return domain.Snapshot{}, err
+		}
+		snapshot.Version = domain.CodingVersion
+		snapshot.Evidence = &evidence
+	}
 	err = w.repo.Use(ctx, func(repo repository) error { var err error; snapshot, err = repo.Seal(ctx, snapshot); return err })
 	return snapshot, err
 }
@@ -155,39 +169,40 @@ func (w *workflow) finishSealed(ctx context.Context, run domain.Run) (domain.Run
 	if run.ModelProfile != w.profile {
 		return run, false, domain.ErrExecutionIdentity
 	}
+	found := false
+	err := w.repo.Use(ctx, func(repo repository) error { var err error; run, found, err = settleSaved(ctx, run, repo); return err })
+	return run, found, err
+}
+func settleSaved(ctx context.Context, run domain.Run, repo repository) (domain.Run, bool, error) {
 	checkpoint := domain.StableID("checkpoint", run.ID, 0)
-	var snapshot domain.Snapshot
-	err := w.repo.Use(ctx, func(repo repository) error {
-		var err error
-		snapshot, err = repo.Snapshot(ctx, checkpoint)
-		return err
-	})
+	snapshot, err := repo.Snapshot(ctx, checkpoint)
 	if errors.Is(err, domain.ErrNotFound) {
 		return run, false, nil
 	}
 	if err != nil {
 		return run, false, err
 	}
-	var base domain.Envelope
-	if err := w.repo.Use(ctx, func(repo repository) error {
-		var err error
-		_, base, err = repo.Binding(ctx, run.AgentRunID)
-		return err
-	}); err != nil {
+	_, base, err := repo.Binding(ctx, run.AgentRunID)
+	if err != nil {
 		return run, true, err
 	}
 	if err := agentbridge.Verify(run, base, snapshot); err != nil {
 		return run, true, err
 	}
-	err = w.repo.Use(ctx, func(repo repository) error {
-		var err error
-		run, err = repo.Progress(ctx, run.ID, string(agent.Completed), "success", snapshot.AgentRef.Revision)
-		if err != nil {
-			return err
+	if run.Equipment != nil {
+		var record agent.Run
+		if domain.Strict(snapshot.AgentRecord, &record) != nil || snapshot.Evidence == nil {
+			return run, true, domain.ErrCorrupt
 		}
-		run, err = repo.Settle(ctx, run.ID, &checkpoint, "success")
-		return err
-	})
+		if err := verifyEvidence(run, base, record, *snapshot.Evidence); err != nil {
+			return run, true, err
+		}
+	}
+	run, err = repo.Progress(ctx, run.ID, string(agent.Completed), "success", snapshot.AgentRef.Revision)
+	if err != nil {
+		return run, true, err
+	}
+	run, err = repo.Settle(ctx, run.ID, &checkpoint, "success")
 	return run, true, err
 }
 
@@ -229,7 +244,7 @@ func (w *workflow) Finish(ctx context.Context, id string, timedout bool) (domain
 	return run, err
 }
 func workflowDefinition(profile string, observer func(Stage, domain.Run) error) forest.Definition {
-	return forest.Definition{TypeID: "focus-go.workflow", Version: "1", Ports: []forest.PortDescriptor{forest.Port[repository]("repository", forest.Required(), forest.During(forest.Construction)), forest.Port[agent.Executor]("agent", forest.Required())}, Capabilities: []forest.CapabilityDescriptor{forest.Capability[workflowAPI]("workflow", forest.Public)}, Build: func(ctx context.Context, env *forest.BuildEnv) (forest.Lifecycle, error) {
+	return forest.Definition{TypeID: "focus-go.workflow", Version: "1", Ports: []forest.PortDescriptor{forest.Port[evidenceReader]("evidence"), forest.Port[repository]("repository", forest.Required(), forest.During(forest.Construction)), forest.Port[agent.Executor]("agent", forest.Required())}, Capabilities: []forest.CapabilityDescriptor{forest.Capability[workflowAPI]("workflow", forest.Public)}, Build: func(ctx context.Context, env *forest.BuildEnv) (forest.Lifecycle, error) {
 		repo, err := forest.Reference[repository](env, "repository")
 		if err != nil {
 			return nil, err
@@ -238,6 +253,10 @@ func workflowDefinition(profile string, observer func(Stage, domain.Run) error) 
 		if err != nil {
 			return nil, err
 		}
-		return forest.Hooks{}, forest.Provide(env, "workflow", &workflow{repo: repo, agent: runner, profile: profile, observer: observer})
+		evidence, err := forest.Reference[evidenceReader](env, "evidence")
+		if err != nil {
+			return nil, err
+		}
+		return forest.Hooks{}, forest.Provide(env, "workflow", &workflow{evidence: evidence, repo: repo, agent: runner, profile: profile, observer: observer})
 	}}
 }

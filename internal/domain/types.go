@@ -115,11 +115,12 @@ type Revision struct {
 	Issues            []json.RawMessage `json:"issues"`
 }
 type Envelope struct {
-	Version     string   `json:"contract_version"`
-	RecordType  string   `json:"record_type"`
-	HashProfile string   `json:"hash_profile"`
-	Backend     Backend  `json:"checkpoint_backend"`
-	Revision    Revision `json:"revision"`
+	EvidenceHash string   `json:"evidence_hash,omitempty"`
+	Version      string   `json:"contract_version"`
+	RecordType   string   `json:"record_type"`
+	HashProfile  string   `json:"hash_profile"`
+	Backend      Backend  `json:"checkpoint_backend"`
+	Revision     Revision `json:"revision"`
 }
 type Context struct {
 	WorkspaceID string `json:"workspace_id"`
@@ -265,6 +266,17 @@ func (e Envelope) ExpectedHash() (string, error) {
 	if r.Ref.CheckpointID == nil {
 		return "", ErrInvalid
 	}
+	if e.Version == CodingVersion {
+		if r.OriginKind != "run_settled" || r.OriginID == nil || len(e.EvidenceHash) != 64 {
+			return "", ErrInvalid
+		}
+		return Hash(struct {
+			RunID        string  `json:"run_id"`
+			CheckpointID string  `json:"checkpoint_id"`
+			History      History `json:"history_payload"`
+			Evidence     string  `json:"evidence_hash"`
+		}{*r.OriginID, *r.Ref.CheckpointID, r.History, e.EvidenceHash})
+	}
 	if r.OriginKind == "root" {
 		return Hash(struct {
 			ContextID    string  `json:"context_id"`
@@ -282,7 +294,7 @@ func (e Envelope) ExpectedHash() (string, error) {
 	return "", ErrUnsupportedHistory
 }
 func (e Envelope) Validate() error {
-	if e.Version != ContractVersion || e.RecordType != "context_revision" || e.HashProfile != HashProfile {
+	if (e.Version != ContractVersion && e.Version != CodingVersion) || e.RecordType != "context_revision" || e.HashProfile != HashProfile || (e.Version == ContractVersion && e.EvidenceHash != "") {
 		return ErrInvalid
 	}
 	if err := e.Backend.Validate(); err != nil {

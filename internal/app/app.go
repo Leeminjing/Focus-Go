@@ -11,25 +11,39 @@ import (
 	"github.com/Leeminjing/Focus-Go/internal/agentbridge"
 	"github.com/Leeminjing/Focus-Go/internal/domain"
 	"github.com/Leeminjing/Focus-Go/internal/store"
+	"github.com/Leeminjing/Focus-Go/internal/workspace"
 	"github.com/Leeminjing/go-forest-agent/agent"
-	"github.com/Leeminjing/go-forest-agent/trees/events"
 	"github.com/Leeminjing/go-forest-agent/trees/filecheckpoint"
 	"github.com/Leeminjing/go-forest-agent/trees/manualapproval"
+	"github.com/Leeminjing/go-forest-agent/trees/openairesponses"
+	"github.com/Leeminjing/go-forest-agent/trees/responsejournal"
 	"github.com/Leeminjing/go-forest/forest"
+	"github.com/Leeminjing/go-forest/forest/compose"
 )
 
 type Options struct {
-	Directory       string
-	Model           agent.Model
-	Tool            agent.Tool
-	RequireApproval bool
-	ModelProfile    string
-	Observer        func(Stage, domain.Run) error
+	Coding            *domain.Equipment
+	Responses         *openairesponses.Config
+	Tools             []ToolMount
+	EventHandler      func(context.Context, agent.Event) error
+	WorkspaceObserver func(workspace.Stage, domain.Receipt) error
+	Directory         string
+	Model             agent.Model
+	Tool              agent.Tool
+	RequireApproval   bool
+	ModelProfile      string
+	Observer          func(Stage, domain.Run) error
 }
 type Application struct {
-	forest   *forest.Forest
-	observer func(Stage, domain.Run) error
-	profile  string
+	equipment *domain.Equipment
+	forest    *forest.Forest
+	observer  func(Stage, domain.Run) error
+	profile   string
+}
+type ToolMount struct {
+	ID         forest.TreeID
+	Definition forest.Definition
+	Capability forest.CapabilityID
 }
 type Outcome struct {
 	Run      domain.Run `json:"run"`
@@ -42,6 +56,44 @@ func New(options Options) (*Application, error) {
 	if options.Directory == "" {
 		return nil, domain.ErrInvalid
 	}
+	if len(options.Tools) > 0 && options.Tool != nil {
+		return nil, domain.ErrInvalid
+	}
+	if options.Coding != nil {
+		copy, err := domain.Copy(*options.Coding)
+		if err != nil || copy.Validate() != nil {
+			return nil, domain.ErrInvalid
+		}
+		options.Coding = &copy
+		expected, err := CodingEquipment(copy.Workspace, copy.ModelProfile)
+		if err != nil {
+			return nil, err
+		}
+		a, _ := domain.Hash(expected.Tools)
+		b, _ := domain.Hash(copy.Tools)
+		if a != b {
+			return nil, domain.ErrExecutionIdentity
+		}
+		if options.ModelProfile == "" {
+			options.ModelProfile = copy.ModelProfile
+		}
+		if options.ModelProfile != copy.ModelProfile || options.Tool != nil || len(options.Tools) > 0 {
+			return nil, domain.ErrInvalid
+		}
+	}
+	if options.Responses != nil {
+		profile, err := openairesponses.Profile(*options.Responses)
+		if err != nil {
+			return nil, err
+		}
+		if options.ModelProfile != "" && options.ModelProfile != profile {
+			return nil, domain.ErrExecutionIdentity
+		}
+		options.ModelProfile = profile
+		if options.Model != nil {
+			return nil, domain.ErrInvalid
+		}
+	}
 	if options.ModelProfile == "" {
 		options.ModelProfile = "fixture-base-add-v1"
 	}
@@ -49,6 +101,9 @@ func New(options Options) (*Application, error) {
 		return nil, domain.ErrInvalid
 	}
 	if options.Model == nil {
+		if options.Coding != nil && options.Responses == nil {
+			return nil, domain.ErrInvalid
+		}
 		options.Model = fixtureModel{}
 	}
 	if options.Tool == nil {
@@ -70,6 +125,9 @@ func New(options Options) (*Application, error) {
 		}
 		return life, forest.Provide(env, "model", options.Model)
 	}}
+	if options.Responses != nil {
+		model = openairesponses.Definition(*options.Responses)
+	}
 	tool := forest.Definition{TypeID: "focus-go.tool", Version: "1", Capabilities: []forest.CapabilityDescriptor{forest.Capability[agent.Tool]("tool", forest.Public)}, Build: func(ctx context.Context, env *forest.BuildEnv) (forest.Lifecycle, error) {
 		var life forest.Lifecycle = forest.Hooks{}
 		if supplied, ok := options.Tool.(forest.Lifecycle); ok {
@@ -85,10 +143,13 @@ func New(options Options) (*Application, error) {
 		{"repository", store.Definition(filepath.Join(options.Directory, "focus"))},
 		{"agent", agent.Definition(agent.Options{})}, {"history-model", agentbridge.Definition()},
 		{"model", model}, {"tool", tool}, {"checkpoint", filecheckpoint.Definition(filepath.Join(options.Directory, "agent"))},
-		{"events", events.Definition(events.New(32768))}, {"approval", manualapproval.Definition()},
+		{"events", eventDefinition(options.EventHandler)}, {"approval", manualapproval.Definition()},
 	}
 	var operations []forest.Operation
 	for _, item := range definitions {
+		if item.id == "tool" && (options.Coding != nil || len(options.Tools) > 0) {
+			continue
+		}
 		if err := f.Register(item.def); err != nil {
 			return nil, err
 		}
@@ -105,13 +166,74 @@ func New(options Options) (*Application, error) {
 		{"agent", "model", "history-model", "model"}, {"agent", "tools", "tool", "tool"},
 		{"agent", "checkpoint", "checkpoint", "checkpoint"}, {"agent", "events", "events", "events"}, {"agent", "approval", "approval", "approval"},
 	} {
+		if binding.consumer == "agent" && binding.port == "tools" && (options.Coding != nil || len(options.Tools) > 0) {
+			continue
+		}
 		operations = append(operations, forest.Connect(forest.Link{ID: domain.StableID("link", "application", i), Consumer: binding.consumer, Port: binding.port, Provider: binding.provider, Capability: binding.cap}))
+	}
+	if options.Responses != nil {
+		definition := responsejournal.Definition(filepath.Join(options.Directory, "responses"))
+		if err := f.Register(definition); err != nil {
+			return nil, err
+		}
+		operations = append(operations, forest.AddRoot("response-journal", definition.Ref()), forest.Connect(forest.Link{ID: "model-journal", Consumer: "model", Port: "journal", Provider: "response-journal", Capability: "journal"}))
+	}
+	if len(options.Tools) > 0 {
+		for index, mount := range options.Tools {
+			if err := f.Register(mount.Definition); err != nil {
+				return nil, err
+			}
+			operations = append(operations, forest.AddRoot(mount.ID, mount.Definition.Ref()), forest.Connect(forest.Link{ID: domain.StableID("tool-link", "application", index), Consumer: "agent", Port: "tools", Provider: mount.ID, Capability: mount.Capability}))
+		}
+	}
+	if options.Coding != nil {
+		root := workspace.RootDefinition(options.Coding.Workspace, filepath.Join(options.Directory, "workspace-receipts"), options.WorkspaceObserver)
+		if err := f.Register(root); err != nil {
+			return nil, err
+		}
+		spec := compose.Spec{Root: root.Ref()}
+		for index, name := range []string{"workspace_search", "workspace_read", "workspace_edit"} {
+			definition := workspace.ToolDefinition(name, options.Coding.Workspace.Preapproved)
+			if err := f.Register(definition); err != nil {
+				return nil, err
+			}
+			local := forest.TreeID(name)
+			spec.Trees = append(spec.Trees, compose.Tree{ID: local, Definition: definition.Ref()})
+			spec.Bindings = append(spec.Bindings, forest.Link{ID: name + "-files", Consumer: local, Port: "files", Capability: "files"})
+			provider := forest.TreeID("workspace/" + name)
+			operations = append(operations, forest.Connect(forest.Link{ID: name + "-binding", Consumer: provider, Port: "binding", Provider: "repository", Capability: "repository"}), forest.Connect(forest.Link{ID: name + "-execution", Consumer: provider, Port: "execution", Provider: "agent", Capability: "executor"}), forest.Connect(forest.Link{ID: domain.StableID("coding-tool-link", "application", index), Consumer: "agent", Port: "tools", Provider: provider, Capability: "tool"}))
+		}
+		blueprint, err := compose.New(spec)
+		if err != nil {
+			return nil, err
+		}
+		instance, err := blueprint.Instantiate("workspace", "")
+		if err != nil {
+			return nil, err
+		}
+		operations = append(operations, instance.Plan(0).Operations...)
+		definition := evidenceDefinition(options.Responses != nil)
+		if err := f.Register(definition); err != nil {
+			return nil, err
+		}
+		operations = append(operations, forest.AddRoot("evidence", definition.Ref()), forest.Connect(forest.Link{ID: "evidence-files", Consumer: "evidence", Port: "workspace", Provider: "workspace", Capability: "evidence"}), forest.Connect(forest.Link{ID: "workflow-evidence", Consumer: "focus", Port: "evidence", Provider: "evidence", Capability: "evidence"}))
+		if options.Responses != nil {
+			operations = append(operations, forest.Connect(forest.Link{ID: "evidence-model", Consumer: "evidence", Port: "journal", Provider: "response-journal", Capability: "journal"}))
+		}
 	}
 	if _, err := f.Apply(context.Background(), forest.ChangePlan{Operations: operations}); err != nil {
 		return nil, err
 	}
+	application := &Application{forest: f, observer: options.Observer, profile: options.ModelProfile, equipment: options.Coding}
+	if options.Coding != nil {
+		if err := application.repo(context.Background(), func(ctx context.Context, r store.Capability) error {
+			return r.RegisterWorkspace(ctx, options.Coding.Workspace)
+		}); err != nil {
+			return nil, err
+		}
+	}
 	ok = true
-	return &Application{forest: f, observer: options.Observer, profile: options.ModelProfile}, nil
+	return application, nil
 }
 func (a *Application) Close(ctx context.Context) error { return a.forest.Close(ctx) }
 func (a *Application) repo(ctx context.Context, fn func(context.Context, store.Capability) error) error {
@@ -181,6 +303,22 @@ func (a *Application) Snapshot(ctx context.Context, id string) (domain.Snapshot,
 }
 
 func (a *Application) Run(ctx context.Context, request domain.Request) (Outcome, error) {
+	if a.equipment != nil {
+		if request.Equipment != nil {
+			x, _ := domain.Hash(*request.Equipment)
+			y, _ := domain.Hash(*a.equipment)
+			if x != y {
+				return Outcome{}, domain.ErrExecutionIdentity
+			}
+		}
+		copy, err := domain.Copy(*a.equipment)
+		if err != nil {
+			return Outcome{}, err
+		}
+		request.Equipment = &copy
+	} else if request.Equipment != nil {
+		return Outcome{}, domain.ErrExecutionIdentity
+	}
 	if _, err := a.forest.Generation(ctx); err == nil {
 		return Outcome{}, agent.ErrNestedScope
 	}
@@ -248,7 +386,7 @@ func (a *Application) Resume(ctx context.Context, id string) (Outcome, error) {
 	if run.ModelProfile != a.profile {
 		return Outcome{}, domain.ErrExecutionIdentity
 	}
-	return a.Run(ctx, domain.Request{WorkspaceID: run.WorkspaceID, ContextID: run.TaskID, Expected: run.Base, Input: run.Input[0].Content, Key: run.Key})
+	return a.Run(ctx, domain.Request{Equipment: run.Equipment, WorkspaceID: run.WorkspaceID, ContextID: run.TaskID, Expected: run.Base, Input: run.Input[0].Content, Key: run.Key})
 }
 func (a *Application) outcome(ctx context.Context, id string) (Outcome, error) {
 	run, err := a.Record(ctx, id)

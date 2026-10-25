@@ -38,6 +38,10 @@ func (h *historyModel) Generate(ctx context.Context, request agent.ModelRequest,
 	if err := CheckInput(run, request.RunID, request.Messages); err != nil {
 		return agent.ModelResult{}, err
 	}
+	runCalls := 0
+	for _, message := range request.Messages {
+		runCalls += len(message.Calls)
+	}
 	previous, err := base.Revision.History.Messages()
 	if err != nil {
 		return agent.ModelResult{}, err
@@ -73,6 +77,10 @@ func (h *historyModel) Generate(ctx context.Context, request agent.ModelRequest,
 			if !domain.ID(call.ID) || !domain.ID(call.Name) || domain.Strict(call.Arguments, &args) != nil || args == nil {
 				return domain.ErrInvalid
 			}
+		}
+		count := len(result.Calls) + runCalls
+		if count > 64 {
+			return domain.ErrInvalid
 		}
 		return nil
 	})

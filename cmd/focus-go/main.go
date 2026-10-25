@@ -20,10 +20,17 @@ func main() {
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		var exit *ExitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.Code)
+		}
 		os.Exit(1)
 	}
 }
 func run(ctx context.Context, args []string, out, diagnostics io.Writer) (result error) {
+	if len(args) > 0 && args[0] != "demo" {
+		return commands(ctx, args, out, diagnostics)
+	}
 	if len(args) == 0 || args[0] != "demo" {
 		return errors.New("usage: focus-go demo [-data DIRECTORY] [-fixture FILE] [-input ADD=2] [-key demo]")
 	}

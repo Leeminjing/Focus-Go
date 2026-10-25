@@ -169,6 +169,18 @@ func (r *Repository) Admit(ctx context.Context, request domain.Request, profile 
 			if run.TaskID == request.ContextID && run.Settlement == nil {
 				return false, domain.ErrBusy
 			}
+			if request.Equipment != nil && run.Equipment != nil && run.Equipment.Workspace.Identity == request.Equipment.Workspace.Identity && run.Settlement == nil {
+				return false, domain.ErrBusy
+			}
+		}
+		if request.Equipment != nil {
+			bound, ok := c.Workspaces[request.WorkspaceID]
+			a, _ := domain.Hash(bound)
+			b, _ := domain.Hash(request.Equipment.Workspace)
+			if !ok || a != b || request.Equipment.ModelProfile != profile {
+				return false, domain.ErrExecutionIdentity
+			}
+			c.Version = domain.CodingVersion
 		}
 		ids := make([]string, 0, len(messages)+1)
 		for _, message := range messages {
@@ -179,6 +191,14 @@ func (r *Repository) Admit(ctx context.Context, request domain.Request, profile 
 		}
 		ids = append(ids, inputID)
 		admitted = domain.Run{ID: runID, TaskID: request.ContextID, WorkspaceID: request.WorkspaceID, Kind: "main", Status: "pending", Base: request.Expected, Input: []domain.Message{{ID: inputID, Role: "user", Content: request.Input}}, Origin: "direct_user", OriginMessageID: inputID, Key: request.Key, RequestHash: hash, ExecutionThreadID: request.Expected.ExecutionThreadID, CheckpointNS: request.Expected.CheckpointNS, AgentRunID: domain.StableID("agent", runID, 0), Phase: "admitted", ModelProfile: profile, InputMessageIDs: ids}
+		if request.Equipment != nil {
+			equipment, err := domain.Copy(*request.Equipment)
+			if err != nil {
+				return false, err
+			}
+			admitted.Equipment = &equipment
+			admitted.Version = domain.CodingVersion
+		}
 		c.Runs[runID] = admitted
 		return true, nil
 	})
@@ -250,6 +270,16 @@ func (r *Repository) Settle(ctx context.Context, id string, snapshotID *string, 
 		if status == "success" && (snapshot.Base == nil || !snapshot.Base.Equal(run.Base) || snapshot.Backend != c.Revisions[run.Base.RevisionID].Backend) {
 			return false, domain.ErrExecutionIdentity
 		}
+		if status == "success" && run.Equipment != nil {
+			if snapshot.Version != domain.CodingVersion || snapshot.Evidence == nil {
+				return false, domain.ErrCorrupt
+			}
+			a, _ := domain.Hash(*run.Equipment)
+			b, _ := domain.Hash(snapshot.Evidence.Equipment)
+			if a != b {
+				return false, domain.ErrExecutionIdentity
+			}
+		}
 		settlement := domain.Settlement{RunID: id, TaskID: run.TaskID, Kind: "main", Status: status, FinalCheckpointID: snapshotID, Publication: "not_applicable", EventID: domain.StableID("event", id, 0)}
 		if status == "success" {
 			run.ResultRef = snapshotID
@@ -266,6 +296,17 @@ func (r *Repository) Settle(ctx context.Context, id string, snapshotID *string, 
 				}
 				ref := domain.Ref{ContextID: run.TaskID, RevisionID: domain.StableID("revision", id, 0), Generation: generation, ExecutionThreadID: run.ExecutionThreadID, CheckpointNS: run.CheckpointNS, CheckpointID: snapshotID, PayloadMode: "checkpoint"}
 				env := domain.Envelope{Version: domain.ContractVersion, RecordType: "context_revision", HashProfile: domain.HashProfile, Backend: base.Backend, Revision: domain.Revision{Ref: ref, Sources: []domain.Source{{Source: run.Base, Position: 0}}, History: snapshot.History, ProjectionStatus: "valid", OriginKind: "run_settled", OriginID: domain.Pointer(id), CreatedAt: snapshot.CreatedAt, InitialMessageIDs: []string{}, RepairManifest: []json.RawMessage{}, Issues: []json.RawMessage{}}}
+				if run.Equipment != nil {
+					if snapshot.Evidence == nil {
+						return false, domain.ErrCorrupt
+					}
+					env.Version = domain.CodingVersion
+					var err error
+					env.EvidenceHash, err = domain.Hash(*snapshot.Evidence)
+					if err != nil {
+						return false, err
+					}
+				}
 				messages, _ := snapshot.History.Messages()
 				for _, message := range messages {
 					env.Revision.InitialMessageIDs = append(env.Revision.InitialMessageIDs, message.ID)
