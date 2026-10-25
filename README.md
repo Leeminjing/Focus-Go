@@ -38,6 +38,7 @@ Context Generation、Forest Generation 和 Agent checkpoint Revision 是不同�
 - Revision、current、Run Settlement 和 outbox 一起提交。重复结算返回同一事实，事件消费者按稳定身份去重。
 - 审批/unknown 保持未结算并阻止同 Context 新 Main Run；失败、取消或超时不发布成功 Revision。
 - Recover/Resolve/Decide 仅面向可信宿主，恢复必须先确认旧执行者停止，不自动推断工具结果或重放工具。
+- 已封存的产品快照经完整校验后可以独立结算；未封存的既有执行丢失 Agent 检查点时明确报错，不重新创建并重放工具。
 
 存储采用本地不可变 Catalog 修订和结果快照，以文件 fsync 后原子硬链接发布，要求支持硬链接的文件系统。最高记录或被引用快照损坏会报错，不回退旧状态。支持实际进程终止恢复，不承诺 Windows 断电持久性、跨存储全局事务或分布式租约；数据目录按可信本地宿主管理，不提供加密或用户沙箱。
 
@@ -56,5 +57,7 @@ go test -race ./... -count=3 -timeout 120s
 ```
 
 测试覆盖完整闭环、变体、精确 Ref、历史输入、已闭合工具证据不重放、审批/unknown/取消/失败、并发 Context、幂等/冲突、存储损坏及四个真实进程终止恢复窗口。
+
+逐项验收与独立审查结果见 [validation.md](docs/validation.md) 和 [review.md](docs/review.md)。
 
 Spec/Design 已获用户批准，仅保存在开发者本地，由 .gitignore 排除，不进入 Git 历史；.scratch 也不上传。

@@ -239,7 +239,7 @@ func (c Catalog) Validate() error {
 		}
 	}
 	active := map[string]bool{}
-	keys := map[string]bool{}
+	keys := map[struct{ workspace, key string }]bool{}
 	for id, run := range c.Runs {
 		if run.ID != id || run.Validate() != nil {
 			return ErrCorrupt
@@ -261,7 +261,7 @@ func (c Catalog) Validate() error {
 		if run.InputMessageIDs[len(messages)] != run.OriginMessageID {
 			return ErrCorrupt
 		}
-		key := run.WorkspaceID + "\x00" + run.Key
+		key := struct{ workspace, key string }{run.WorkspaceID, run.Key}
 		if keys[key] {
 			return ErrCorrupt
 		}

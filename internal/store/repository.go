@@ -138,7 +138,14 @@ func (r *Repository) Admit(ctx context.Context, request domain.Request, profile 
 	if err != nil {
 		return domain.Run{}, err
 	}
-	runID := domain.StableID("run", request.WorkspaceID+"\x00"+request.Key, 0)
+	identity, err := domain.Hash(struct {
+		Workspace string `json:"workspace"`
+		Key       string `json:"key"`
+	}{request.WorkspaceID, request.Key})
+	if err != nil {
+		return domain.Run{}, err
+	}
+	runID := domain.StableID("run", identity, 0)
 	inputID := domain.StableID("message", runID, 0)
 	var admitted domain.Run
 	err = r.update(ctx, func(c *domain.Catalog) (bool, error) {

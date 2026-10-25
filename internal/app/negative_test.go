@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Leeminjing/Focus-Go/internal/app"
@@ -93,5 +95,56 @@ func TestPublicationFailureAfterToolCompletionResumesWithoutReexecution(t *testi
 	finished, err := second.Resume(context.Background(), result.Run.ID)
 	if err != nil || !finished.Verified || finished.Answer != "42" || tool.calls.Load() != 1 {
 		t.Fatal(finished, err, tool.calls.Load())
+	}
+}
+
+func TestMissingAgentStorageNeverReplaysCompletedTools(t *testing.T) {
+	for _, stage := range []app.Stage{app.ResultSealed, app.AgentCompleted} {
+		t.Run(string(stage), func(t *testing.T) {
+			ctx := context.Background()
+			data, f := load(t)
+			tool := &testTool{}
+			directory := t.TempDir()
+			fault := errors.New("publication interrupted")
+			a := open(t, app.Options{Directory: directory, Tool: tool, Observer: func(observed app.Stage, _ domain.Run) error {
+				if observed == stage {
+					return fault
+				}
+				return nil
+			}})
+			if err := a.Import(ctx, data, nil); err != nil {
+				t.Fatal(err)
+			}
+			first, err := a.Run(ctx, request(f, "missing-agent"))
+			if !errors.Is(err, fault) || tool.calls.Load() != 1 {
+				t.Fatal(first, err, tool.calls.Load())
+			}
+			if err := os.Rename(filepath.Join(directory, "agent"), filepath.Join(directory, "agent-unavailable")); err != nil {
+				t.Fatal(err)
+			}
+			second := open(t, app.Options{Directory: directory, Tool: tool})
+			finished, err := second.Resume(ctx, first.Run.ID)
+			if stage == app.ResultSealed {
+				if err != nil || !finished.Verified || finished.Answer != "42" {
+					t.Fatal("sealed result must settle independently", finished, err)
+				}
+			} else if !errors.Is(err, domain.ErrExecutionIdentity) {
+				t.Fatal("missing existing checkpoint must fail explicitly", finished, err)
+			}
+			if tool.calls.Load() != 1 {
+				t.Fatal("completed effect replayed", tool.calls.Load())
+			}
+			state, err := second.State(ctx)
+			if err != nil || len(state.Runs) != 1 {
+				t.Fatal(state, err)
+			}
+			if stage == app.ResultSealed {
+				if len(state.Revisions) != 2 || len(state.Events) != 1 {
+					t.Fatal(state)
+				}
+			} else if len(state.Revisions) != 1 || len(state.Events) != 0 {
+				t.Fatal("unsealed result published", state)
+			}
+		})
 	}
 }

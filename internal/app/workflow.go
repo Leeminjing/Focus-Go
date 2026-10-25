@@ -59,6 +59,9 @@ func (w *workflow) Prepare(ctx context.Context, request domain.Request) (domain.
 	if run.Settlement != nil {
 		return run, nil
 	}
+	if restored, found, err := w.finishSealed(ctx, run); found || err != nil {
+		return restored, err
+	}
 	if err := observe(w.observer, Admitted, run); err != nil {
 		return run, err
 	}
@@ -67,6 +70,11 @@ func (w *workflow) Prepare(ctx context.Context, request domain.Request) (domain.
 		var err error
 		record, err = executor.Read(ctx, run.AgentRunID)
 		if errors.Is(err, agent.ErrNotFound) {
+			// Once Focus has observed this execution, absence is data loss,
+			// never permission to replay its potentially completed effects.
+			if run.AgentRevision > 0 {
+				return errors.Join(domain.ErrExecutionIdentity, err)
+			}
 			record, err = executor.Create(ctx, run.AgentRunID, run.Input[0].Content)
 			if errors.Is(err, agent.ErrConflict) {
 				record, err = executor.Read(ctx, run.AgentRunID)
@@ -139,6 +147,50 @@ func (w *workflow) Seal(ctx context.Context, id string) (domain.Snapshot, error)
 	err = w.repo.Use(ctx, func(repo repository) error { var err error; snapshot, err = repo.Seal(ctx, snapshot); return err })
 	return snapshot, err
 }
+
+// A sealed product snapshot contains the complete execution record. Verify it
+// against the frozen binding before settlement, without requiring the private
+// Agent store (or running any model/tool) again.
+func (w *workflow) finishSealed(ctx context.Context, run domain.Run) (domain.Run, bool, error) {
+	if run.ModelProfile != w.profile {
+		return run, false, domain.ErrExecutionIdentity
+	}
+	checkpoint := domain.StableID("checkpoint", run.ID, 0)
+	var snapshot domain.Snapshot
+	err := w.repo.Use(ctx, func(repo repository) error {
+		var err error
+		snapshot, err = repo.Snapshot(ctx, checkpoint)
+		return err
+	})
+	if errors.Is(err, domain.ErrNotFound) {
+		return run, false, nil
+	}
+	if err != nil {
+		return run, false, err
+	}
+	var base domain.Envelope
+	if err := w.repo.Use(ctx, func(repo repository) error {
+		var err error
+		_, base, err = repo.Binding(ctx, run.AgentRunID)
+		return err
+	}); err != nil {
+		return run, true, err
+	}
+	if err := agentbridge.Verify(run, base, snapshot); err != nil {
+		return run, true, err
+	}
+	err = w.repo.Use(ctx, func(repo repository) error {
+		var err error
+		run, err = repo.Progress(ctx, run.ID, string(agent.Completed), "success", snapshot.AgentRef.Revision)
+		if err != nil {
+			return err
+		}
+		run, err = repo.Settle(ctx, run.ID, &checkpoint, "success")
+		return err
+	})
+	return run, true, err
+}
+
 func (w *workflow) Finish(ctx context.Context, id string, timedout bool) (domain.Run, error) {
 	var existing domain.Run
 	err := w.repo.Use(ctx, func(repo repository) error { var err error; existing, err = repo.Run(ctx, id); return err })
@@ -147,6 +199,9 @@ func (w *workflow) Finish(ctx context.Context, id string, timedout bool) (domain
 	}
 	if existing.Settlement != nil {
 		return existing, nil
+	}
+	if restored, found, err := w.finishSealed(ctx, existing); found || err != nil {
+		return restored, err
 	}
 	run, record, err := w.Inspect(ctx, id)
 	if err != nil {
@@ -158,31 +213,8 @@ func (w *workflow) Finish(ctx context.Context, id string, timedout bool) (domain
 	}
 	switch record.Status {
 	case agent.Completed:
-		checkpoint := domain.StableID("checkpoint", run.ID, 0)
-		var snapshot domain.Snapshot
-		err = w.repo.Use(ctx, func(repo repository) error { var err error; snapshot, err = repo.Snapshot(ctx, checkpoint); return err })
-		if err != nil {
-			return run, err
-		}
-		if snapshot.AgentRef == nil || snapshot.AgentRef.RunID != record.ID {
-			return run, domain.ErrExecutionIdentity
-		}
-		var base domain.Envelope
-		if err := w.repo.Use(ctx, func(repo repository) error {
-			var err error
-			_, base, err = repo.Binding(ctx, run.AgentRunID)
-			return err
-		}); err != nil {
-			return run, err
-		}
-		if err := agentbridge.Verify(run, base, snapshot); err != nil {
-			return run, err
-		}
-		err = w.repo.Use(ctx, func(repo repository) error {
-			var err error
-			run, err = repo.Settle(ctx, run.ID, &checkpoint, "success")
-			return err
-		})
+		// The host must seal completion before asking for settlement.
+		return run, domain.ErrNotFound
 	case agent.Canceled, agent.Failed:
 		err = w.repo.Use(ctx, func(repo repository) error {
 			var err error

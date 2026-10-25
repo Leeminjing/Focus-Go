@@ -77,3 +77,44 @@ func TestRepositoryBindsExactRevisionAndAdmitsOneMainRun(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceAndIdempotencyKeyRemainDistinctWithEmbeddedSeparators(t *testing.T) {
+	r, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	var ids []string
+	for i, pair := range []struct{ workspace, key string }{{"a\x00b", "c"}, {"a", "b\x00c"}} {
+		f := fixture(t)
+		if i == 1 {
+			ref := f.Context.Current
+			ref.ContextID, ref.RevisionID = "c2", "r-other"
+			ref.CheckpointID = domain.Pointer("cp-other")
+			f.Context.ID, f.Context.Current = ref.ContextID, ref
+			f.Revision.Revision.Ref = ref
+			f.Revision.Revision.ContentHash, err = f.Revision.ExpectedHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.Context.WorkspaceID = pair.workspace
+		if err := r.Install(ctx, f, nil); err != nil {
+			t.Fatal(err)
+		}
+		request := domain.Request{WorkspaceID: pair.workspace, ContextID: f.Context.ID, Expected: f.Context.Current, Input: "ADD=2", Key: pair.key}
+		run, err := r.Admit(ctx, request, "fixture-base-add-v1")
+		if err != nil {
+			t.Fatalf("independent workspace %q: %v", pair.workspace, err)
+		}
+		again, err := r.Admit(ctx, request, "fixture-base-add-v1")
+		if err != nil || again.ID != run.ID {
+			t.Fatal("idempotency changed", again, err)
+		}
+		ids = append(ids, run.ID)
+	}
+	state, err := r.State(ctx)
+	if err != nil || len(state.Runs) != 2 || ids[0] == ids[1] {
+		t.Fatal("independent runs collided", state, err)
+	}
+}
