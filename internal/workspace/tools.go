@@ -265,6 +265,21 @@ func (t *tool) Execute(ctx context.Context, request agent.ToolRequest) (string, 
 		r.Start = offset
 		r.End = offset + len(args.Old)
 		r.Phase = "prepared"
+		completedResult := encode(map[string]any{"ok": true, "status": "applied", "path": r.Path, "before_sha256": r.BeforeHash, "after_sha256": r.AfterHash, "edit_receipt_id": r.ID})
+		candidate := r
+		candidate.Phase = "completed"
+		candidate.Result = completedResult
+		candidate.Digest = strings.Repeat("0", 64)
+		if encoded, err := domain.Marshal(candidate); err != nil || len(encoded) > maxReceiptBytes {
+			r.Before = ""
+			r.After = ""
+			r.BeforeHash = ""
+			r.AfterHash = ""
+			r.Start = 0
+			r.End = 0
+			r.Phase = "completed"
+			return finish(known("evidence_limit"))
+		}
 		if r, err = w.save(ctx, r, 1); err != nil {
 			return "", err
 		}
@@ -319,7 +334,7 @@ func (t *tool) Execute(ctx context.Context, request agent.ToolRequest) (string, 
 			return "", err
 		}
 		r.Phase = "completed"
-		r.Result = encode(map[string]any{"ok": true, "status": "applied", "path": r.Path, "before_sha256": r.BeforeHash, "after_sha256": r.AfterHash, "edit_receipt_id": r.ID})
+		r.Result = completedResult
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if r, err = w.save(saveCtx, r, 2); err != nil {

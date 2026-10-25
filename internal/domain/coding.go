@@ -153,6 +153,9 @@ func (e Evidence) Validate() error {
 	if e.Version != CodingVersion || e.Equipment.Validate() != nil || e.Receipts == nil || len(e.Receipts) > 64 || e.ModelRecords == nil {
 		return ErrCorrupt
 	}
+	if e.Equipment.Model != nil && len(e.ModelRecords) == 0 {
+		return ErrCorrupt
+	}
 	bytes := 0
 	seen := map[string]bool{}
 	for _, r := range e.Receipts {

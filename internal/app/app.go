@@ -22,6 +22,7 @@ import (
 )
 
 type Options struct {
+	managementOnly    bool
 	Coding            *domain.Equipment
 	Responses         *openairesponses.Config
 	Tools             []ToolMount
@@ -35,10 +36,12 @@ type Options struct {
 	Observer          func(Stage, domain.Run) error
 }
 type Application struct {
-	equipment *domain.Equipment
-	forest    *forest.Forest
-	observer  func(Stage, domain.Run) error
-	profile   string
+	directory      string
+	managementOnly bool
+	equipment      *domain.Equipment
+	forest         *forest.Forest
+	observer       func(Stage, domain.Run) error
+	profile        string
 }
 type ToolMount struct {
 	ID         forest.TreeID
@@ -65,6 +68,9 @@ func New(options Options) (*Application, error) {
 			return nil, domain.ErrInvalid
 		}
 		options.Coding = &copy
+		if copy.Model != nil && options.Responses == nil && !options.managementOnly {
+			return nil, domain.ErrExecutionIdentity
+		}
 		expected, err := CodingEquipment(copy.Workspace, copy.ModelProfile)
 		if err != nil {
 			return nil, err
@@ -224,7 +230,7 @@ func New(options Options) (*Application, error) {
 	if _, err := f.Apply(context.Background(), forest.ChangePlan{Operations: operations}); err != nil {
 		return nil, err
 	}
-	application := &Application{forest: f, observer: options.Observer, profile: options.ModelProfile, equipment: options.Coding}
+	application := &Application{forest: f, observer: options.Observer, profile: options.ModelProfile, equipment: options.Coding, directory: options.Directory, managementOnly: options.managementOnly}
 	if options.Coding != nil {
 		if err := application.repo(context.Background(), func(ctx context.Context, r store.Capability) error {
 			return r.RegisterWorkspace(ctx, options.Coding.Workspace)
@@ -303,6 +309,9 @@ func (a *Application) Snapshot(ctx context.Context, id string) (domain.Snapshot,
 }
 
 func (a *Application) Run(ctx context.Context, request domain.Request) (Outcome, error) {
+	if a.managementOnly {
+		return Outcome{}, domain.ErrExecutionIdentity
+	}
 	if a.equipment != nil {
 		if request.Equipment != nil {
 			x, _ := domain.Hash(*request.Equipment)

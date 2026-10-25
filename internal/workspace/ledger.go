@@ -14,6 +14,19 @@ import (
 	"github.com/Leeminjing/Focus-Go/internal/domain"
 )
 
+const maxReceiptBytes = domain.MaxDocument
+
+// LoadReceipts reads evidence without opening the workspace, granting file
+// access, constructing tools, or requiring the executor to be healthy.
+func LoadReceipts(ctx context.Context, directory, agentID string) ([]domain.Receipt, error) {
+	path, err := filepath.Abs(directory)
+	if err != nil {
+		return nil, err
+	}
+	w := &Workspace{directory: path}
+	return w.Receipts(ctx, agentID)
+}
+
 func (w *Workspace) slot(agentID, id string) string {
 	return filepath.Join(w.directory, domain.BytesHash([]byte(agentID)), domain.BytesHash([]byte(id)))
 }
@@ -51,9 +64,9 @@ func (w *Workspace) load(ctx context.Context, agentID, id string) (domain.Receip
 		if err != nil {
 			return result, 0, err
 		}
-		data, err := io.ReadAll(io.LimitReader(file, 4<<20))
+		data, err := io.ReadAll(io.LimitReader(file, maxReceiptBytes+1))
 		closeErr := file.Close()
-		if err != nil || closeErr != nil {
+		if err != nil || closeErr != nil || len(data) > maxReceiptBytes {
 			return result, 0, domain.ErrCorrupt
 		}
 		var next domain.Receipt
@@ -151,10 +164,10 @@ func (w *Workspace) Receipts(ctx context.Context, agentID string) ([]domain.Rece
 			if err != nil {
 				return nil, err
 			}
-			data, err := io.ReadAll(io.LimitReader(f, 4<<20))
+			data, err := io.ReadAll(io.LimitReader(f, maxReceiptBytes+1))
 			f.Close()
-			if err != nil {
-				return nil, err
+			if err != nil || len(data) > maxReceiptBytes {
+				return nil, domain.ErrCorrupt
 			}
 			var r domain.Receipt
 			if domain.Strict(data, &r) != nil {

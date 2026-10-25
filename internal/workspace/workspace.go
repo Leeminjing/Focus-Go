@@ -200,6 +200,9 @@ func (w *Workspace) inspect(path string) error {
 		if i < len(parts)-1 && !info.IsDir() {
 			return ErrDenied
 		}
+		if i == len(parts)-1 && !info.Mode().IsRegular() {
+			return ErrDenied
+		}
 	}
 	return nil
 }
@@ -207,7 +210,7 @@ func (w *Workspace) read(path string) ([]byte, os.FileInfo, error) {
 	if err := w.inspect(path); err != nil {
 		return nil, nil, err
 	}
-	f, err := w.root.Open(path)
+	f, err := w.root.OpenFile(path, readFlags(), 0)
 	if err != nil {
 		return nil, nil, err
 	}

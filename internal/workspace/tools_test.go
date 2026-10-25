@@ -220,6 +220,80 @@ func TestSearchOmitsSecretAndLinkedFiles(t *testing.T) {
 	}
 }
 
+func TestEscapedOneMiBFileKeepsReadableDurableReceipts(t *testing.T) {
+	root := t.TempDir()
+	original := strings.Repeat("\n", (1<<20)-1) + "X"
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := workspace.Bind("w", root, []string{"a.go"}, []string{"a.go"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := workspace.New(binding, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	authorize := func(context.Context, agent.ToolRequest) (workspace.Authorization, error) {
+		return workspace.Authorization{RunID: "focus", Workspace: binding, AgentRevision: 1}, nil
+	}
+	read := workspace.NewTool("workspace_read", w, authorize)
+	raw, _ := domain.Marshal(map[string]any{"path": "a.go", "start_line": 1 << 20, "line_count": 1})
+	result, err := read.Execute(context.Background(), agent.ToolRequest{RunID: "agent", Call: agent.ToolCall{ID: "read", Name: "workspace_read", Arguments: raw}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]json.RawMessage
+	_ = domain.Strict([]byte(result), &data)
+	var receipt string
+	_ = json.Unmarshal(data["read_receipt_id"], &receipt)
+	args, _ := domain.Marshal(map[string]any{"path": "a.go", "expected_sha256": domain.BytesHash([]byte(original)), "read_receipt_id": receipt, "old_text": "X", "new_text": "Y"})
+	result, err = workspace.NewTool("workspace_edit", w, authorize).Execute(context.Background(), agent.ToolRequest{RunID: "agent", Call: agent.ToolCall{ID: "edit", Name: "workspace_edit", Arguments: args}})
+	if err != nil || !strings.Contains(result, `"status":"applied"`) {
+		t.Fatal(result, err)
+	}
+	receipts, err := w.Receipts(context.Background(), "agent")
+	if err != nil || len(receipts) != 2 {
+		t.Fatal("encoded receipt became unreadable", err, len(receipts))
+	}
+}
+
+func TestOversizedReceiptIsReportedAsCorruptInsteadOfAnEmptyHistory(t *testing.T) {
+	directory := t.TempDir()
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "a.go"), []byte("code\n"), 0600)
+	binding, err := workspace.Bind("w", root, []string{"a.go"}, []string{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := workspace.New(binding, directory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	tool := workspace.NewTool("workspace_read", w, func(context.Context, agent.ToolRequest) (workspace.Authorization, error) {
+		return workspace.Authorization{RunID: "focus", Workspace: binding, AgentRevision: 1}, nil
+	})
+	if _, err = tool.Execute(context.Background(), agent.ToolRequest{RunID: "agent", Call: agent.ToolCall{ID: "read", Name: "workspace_read", Arguments: json.RawMessage(`{"path":"a.go","start_line":1,"line_count":1}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = filepath.WalkDir(directory, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Name() == "1.json" {
+			return os.Truncate(path, int64(domain.MaxDocument)+1)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = workspace.LoadReceipts(context.Background(), directory, "agent"); !errors.Is(err, domain.ErrCorrupt) {
+		t.Fatal("oversize log hidden", err)
+	}
+}
+
 func mustSpec(t *testing.T, tool agent.Tool) agent.ToolSpec {
 	t.Helper()
 	spec, err := tool.Describe(context.Background())

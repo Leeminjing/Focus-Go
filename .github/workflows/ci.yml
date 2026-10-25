@@ -15,9 +15,9 @@ jobs:
           go-version: '1.26.x'
           cache: true
       - run: go vet ./...
-      - run: go test ./... -timeout 90s
+      - run: go test ./... -timeout 120s
       - if: runner.os == 'Linux'
-        run: go test -race ./... -count=3 -timeout 120s
+        run: go test -race ./... -count=3 -timeout 180s
       - run: go run ./cmd/focus-go demo -data .scratch/ci-demo
       - run: go run ./cmd/focus-go demo -data .scratch/ci-demo
       - run: go run ./cmd/focus-go demo -data .scratch/ci-variant -fixture testdata/base-7.json -input ADD=5

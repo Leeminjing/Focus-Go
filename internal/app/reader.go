@@ -27,7 +27,16 @@ func OpenReader(directory string) (*Application, error) {
 		f.Close(context.Background())
 		return nil, err
 	}
-	return &Application{forest: f}, nil
+	return &Application{forest: f, directory: directory, managementOnly: true}, nil
+}
+
+type managementModel struct{}
+
+func (managementModel) Generate(context.Context, agent.ModelRequest, func(string) error) (agent.ModelResult, error) {
+	return agent.ModelResult{}, domain.ErrExecutionIdentity
+}
+func OpenManager(directory string, equipment domain.Equipment) (*Application, error) {
+	return New(Options{Directory: directory, Coding: &equipment, ModelProfile: equipment.ModelProfile, Model: managementModel{}, managementOnly: true})
 }
 func (a *Application) RegisterWorkspace(ctx context.Context, w domain.Workspace) error {
 	return a.repo(ctx, func(ctx context.Context, r store.Capability) error { return r.RegisterWorkspace(ctx, w) })

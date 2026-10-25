@@ -6,6 +6,8 @@ import (
 	"syscall"
 )
 
+func readFlags() int { return os.O_RDONLY }
+
 func identity(f *os.File, info os.FileInfo) (string, uint32, error) {
 	var data syscall.ByHandleFileInformation
 	if err := syscall.GetFileInformationByHandle(syscall.Handle(f.Fd()), &data); err != nil {

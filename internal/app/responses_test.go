@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -122,5 +123,29 @@ func TestNativeResponsesEvidenceSurvivesCanonicalSealingAndPublicationRetry(t *t
 	snapshot, err := second.Snapshot(context.Background(), *finished.Run.ResultRef)
 	if err != nil || snapshot.Evidence == nil || len(snapshot.Evidence.ModelRecords) != 5 {
 		t.Fatal(snapshot, err)
+	}
+	copy, err := domain.Copy(*snapshot.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy.ModelRecords = []domain.Artifact{}
+	if copy.Validate() == nil {
+		t.Fatal("declared native execution accepted without model evidence")
+	}
+}
+
+func TestNativeEquipmentCannotBeExecutedWithOfflineModel(t *testing.T) {
+	root := t.TempDir()
+	binding, err := workspace.Bind("w", root, []string{"."}, []string{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equipment, err := app.ResponsesEquipment(binding, openairesponses.Config{Model: "declared-native"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = app.New(app.Options{Directory: t.TempDir(), Coding: &equipment, ModelProfile: equipment.ModelProfile, Model: modelFunc(codingProcessModel)})
+	if !errors.Is(err, domain.ErrExecutionIdentity) {
+		t.Fatal("native equipment silently substituted", err)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -265,38 +264,9 @@ func commands(ctx context.Context, args []string, out, diagnostics io.Writer) (r
 		}
 	}
 	if action == "evidence" {
-		if run.ResultRef == nil {
-			return write(map[string]any{"run_id": run.ID, "execution_phase": run.Phase, "sealed": false})
-		}
-		snapshot, err := reader.Snapshot(ctx, *run.ResultRef)
+		value, err := reader.Evidence(ctx, run.ID, *checkWorkspace)
 		if err != nil {
 			return err
-		}
-		if snapshot.Evidence == nil {
-			return domain.ErrInvalid
-		}
-		value := map[string]any{"run_id": run.ID, "revision_verified": false, "evidence_verified": snapshot.Evidence.Validate() == nil, "test_status": "not_run", "receipts": snapshot.Evidence.Receipts, "model_records": []map[string]string{}}
-		models := []map[string]string{}
-		for _, artifact := range snapshot.Evidence.ModelRecords {
-			models = append(models, map[string]string{"format": artifact.Format, "sha256": artifact.Digest})
-		}
-		value["model_records"] = models
-		outcome, err := reader.Result(ctx, run.ID)
-		if err != nil {
-			return err
-		}
-		value["revision_verified"] = outcome.Verified
-		if *checkWorkspace {
-			w, err := workspace.New(snapshot.Evidence.Equipment.Workspace, filepath.Join(*directory, "workspace-receipts"), nil)
-			if err != nil {
-				return err
-			}
-			defer w.Close()
-			drift, err := w.Drift(ctx, snapshot.Evidence.Receipts)
-			if err != nil {
-				return err
-			}
-			value["workspace_drift"] = drift
 		}
 		return write(value)
 	}
@@ -329,10 +299,13 @@ func commands(ctx context.Context, args []string, out, diagnostics io.Writer) (r
 		options.EventHandler = func(ctx context.Context, event agent.Event) error {
 			return write(map[string]any{"type": "agent.event", "event": event})
 		}
-	} else {
-		options.Model = disabledModel{}
 	}
-	application, err := app.New(options)
+	var application *app.Application
+	if action == "resume" {
+		application, err = app.New(options)
+	} else {
+		application, err = app.OpenManager(*directory, *run.Equipment)
+	}
 	if err != nil {
 		return err
 	}
@@ -400,10 +373,4 @@ func readText(path string) ([]byte, error) {
 		return nil, domain.ErrInvalid
 	}
 	return data, nil
-}
-
-type disabledModel struct{}
-
-func (disabledModel) Generate(context.Context, agent.ModelRequest, func(string) error) (agent.ModelResult, error) {
-	return agent.ModelResult{}, fmt.Errorf("%w: management-only model", domain.ErrInvalid)
 }

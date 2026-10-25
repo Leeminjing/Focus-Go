@@ -161,6 +161,9 @@ func verifyEvidence(run domain.Run, base domain.Envelope, record agent.Run, e do
 	if index != len(e.Receipts) {
 		return domain.ErrCorrupt
 	}
+	if e.Equipment.Model != nil && len(e.ModelRecords) != record.ModelTurns {
+		return domain.ErrExecutionIdentity
+	}
 	if len(e.ModelRecords) > 0 {
 		previous, err := base.Revision.History.Messages()
 		if err != nil {

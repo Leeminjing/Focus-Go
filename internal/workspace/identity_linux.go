@@ -6,6 +6,8 @@ import (
 	"syscall"
 )
 
+func readFlags() int { return os.O_RDONLY | syscall.O_NONBLOCK }
+
 func identity(f *os.File, info os.FileInfo) (string, uint32, error) {
 	data, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
